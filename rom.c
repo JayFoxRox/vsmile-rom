@@ -2,11 +2,12 @@
 //
 // Use like:
 //
-//    make -C .. && reset && clang rom.c && ./a.out && ../un-disas rom.bin && ../uuu-sdl rom.bin 
+//    make -C .. && reset && clang rom.c -lm && ./a.out && ../un-disas rom.bin && ../uuu-sdl rom.bin 
 
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 typedef enum {
   A_ADD=0,
@@ -172,8 +173,17 @@ static void set_sprite(unsigned int i, uint16_t tile, uint16_t x, uint16_t y, un
 
   //FIXME: if ((u32)(attr & 0x3000) >> 12 != depth)
   store_value(0x2c00+i*4+0, tile);
-  store_value(0x2c00+i*4+1, x);
-  store_value(0x2c00+i*4+2, y);
+
+//  store_value(0x2c00+i*4+1, x);
+  asm_set(R_R1, x);
+  asm_alu(A_ADD, R_R1, R_R3);
+  asm_store(0x2c00+i*4+1, R_R1);
+
+//  store_value(0x2c00+i*4+2, y);
+  asm_set(R_R1, y);
+  asm_alu(A_ADD, R_R1, R_R4);
+  asm_store(0x2c00+i*4+2, R_R1);
+
   store_value(0x2c00+i*4+3, attr);
 }
 
@@ -196,9 +206,36 @@ int main() {
 
   #define BATMAN_INPUT_GPIO 0x3d01
   #define BATMAN_INPUT_GPIO_UP 0x8000
+  #define BATMAN_INPUT_GPIO_DOWN 0x4000
+  #define BATMAN_INPUT_GPIO_LEFT 0x2000
+  #define BATMAN_INPUT_GPIO_RIGHT 0x1000
 
   // Mainloop
+  asm_set(R_R3, 0);
+  asm_set(R_R4, 0);
+
   uint16_t* start = cursor;
+
+  int move_speed = 1;
+
+  asm_load(R_R1, BATMAN_INPUT_GPIO);
+  asm_set(R_R2, BATMAN_INPUT_GPIO_LEFT);
+  asm_alu(A_TEST, R_R1, R_R2);
+  uint16_t* skip_left_fixup = cursor;
+  asm_jump(C_NEQUAL, 0 /*skip_left*/);
+  asm_set(R_R1, move_speed);
+  asm_alu(A_ADD, R_R3, R_R1);
+  uint16_t* skip_left = cursor;
+
+  asm_load(R_R1, BATMAN_INPUT_GPIO);
+  asm_set(R_R2, BATMAN_INPUT_GPIO_RIGHT);
+  asm_alu(A_TEST, R_R1, R_R2);
+  uint16_t* skip_right_fixup = cursor;
+  asm_jump(C_NEQUAL, 0 /*skip_right*/);
+  asm_set(R_R1, move_speed);
+  asm_alu(A_SUB, R_R3, R_R1);
+  uint16_t* skip_right = cursor;
+
   asm_load(R_R1, BATMAN_INPUT_GPIO);
   asm_set(R_R2, BATMAN_INPUT_GPIO_UP);
   asm_alu(A_TEST, R_R1, R_R2);
@@ -228,6 +265,11 @@ int main() {
   {
     uint16_t* cursor_backup = cursor;
 
+    cursor = skip_left_fixup;
+    asm_jump(C_NEQUAL, skip_left);
+    cursor = skip_right_fixup;
+    asm_jump(C_NEQUAL, skip_right);
+
     cursor = jump;
     asm_jump(C_NEQUAL, set_blue);
     asm_goto(fill_red);
@@ -249,7 +291,14 @@ int main() {
   unsigned int sprite_size = 32*32*8/16;
   for(int y = 0; y < 128; y++) {
     for(int x = 0; x < 128; x++) {
-      float l = x / 128.0f * y / 128.0f;
+      float fx = x / 64.0f - 1.0f;
+      float fy = y / 64.0f - 1.0f;
+      float l = 1.0f - sqrtf(fx * fx + fy * fy);
+      if (l < 0.0f) {
+        l = 0.0f;
+      } else {
+        l = 0.1f + 0.9f * l;
+      }
       image[y * 128 + x] = (int)(0xFF * l);
     }
   }
@@ -266,7 +315,7 @@ int main() {
         for(int dx = 0; dx < 32; dx+=2) {
           int image_xy = (y*32+dy) * 128 + (x*32+dx);
           int sprite_xy = (dy*32+dx)/2;
-          store_value(sprite_base + tile * sprite_size + sprite_xy, (image[image_xy+0] << 8) | image[image_xy+1]);
+          store_value(sprite_base + tile * sprite_size + sprite_xy, (image[image_xy+1] << 8) | image[image_xy+0]);
         }
       }
 
